@@ -114,12 +114,37 @@ class GreenDotProcessor:
         """Load FG to Spec mapping - optimized"""
         try:
             logging.info(f"Loading FG to Spec mapping...")
-            df = pd.read_excel(self.fg_to_spec_path, engine="openpyxl")
-            
-            df["Specification"] = df["Specification"].astype(str).str.strip()
-            df["Material"] = df["Material"].astype(str).str.strip().fillna("Not Found")
-            
-            self.fg_dict = dict(zip(df["Specification"], df["Material"]))
+            # Find the header row (first 20 rows) that contains "Specification"
+            preview = pd.read_excel(self.fg_to_spec_path, engine="openpyxl", header=None, nrows=20)
+            header_row = 0
+            for i, row in preview.iterrows():
+                if any(str(v).strip().lower() == "specification" for v in row.values):
+                    header_row = i
+                    break
+            df = pd.read_excel(self.fg_to_spec_path, engine="openpyxl", header=header_row)
+
+            # Find columns by name: ignores case, spaces and small name differences
+            names = {c: str(c).strip().lower() for c in df.columns}
+            spec_col = next((c for c, n in names.items() if n == "specification"), None) \
+                or next((c for c, n in names.items() if "spec" in n), None)
+            mat_col = next((c for c, n in names.items() if n == "material"), None) \
+                or next((c for c, n in names.items() if "material" in n), None)
+            if spec_col is None or mat_col is None:
+                raise ValueError(
+                    f"Specification/Material column not found in {os.path.basename(self.fg_to_spec_path)}. "
+                    f"Columns found: {', '.join(map(str, df.columns))}"
+                )
+            logging.info(f"   Header row: {header_row + 1} | Spec column: '{spec_col}' | Material column: '{mat_col}'")
+
+            # Same key format as FG Code in process_green_dot_file (12 digits, leading zeros)
+            spec_keys = (df[spec_col].astype(str).str.strip()
+                         .str.replace(r"\.0$", "", regex=True).str.zfill(12))
+            materials = (df[mat_col].astype(str).str.strip()
+                         .str.replace(r"\.0$", "", regex=True)
+                         .replace({"nan": "Not Found", "None": "Not Found", "": "Not Found"})
+                         .fillna("Not Found"))
+
+            self.fg_dict = dict(zip(spec_keys, materials))
             
             logging.info(f"✅ Loaded {len(self.fg_dict)} FG mappings")
             
