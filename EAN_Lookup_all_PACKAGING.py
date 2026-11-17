@@ -426,7 +426,7 @@ def main():
         print_separator()
         required_master_cols = [
             'EAN/UPC', 'Material', 'Code Title', 'Gross Weight', 'Net Weight',
-            'Constituent', 'Weight', 'EC Packaging Level', 'ConstituentCategory',
+            'Constituent', 'Weight', 'WeightQuantityFactor', 'EC Packaging Level', 'ConstituentCategory',
             '% Recycled Content', 'Recycled Weight (kg)'
         ]
         validate_columns(master, required_master_cols, "master file")
@@ -436,8 +436,12 @@ def main():
         master['EAN/UPC'] = master['EAN/UPC'].apply(normalize_ean)
         
         # Convert Weight to numeric
-        print_log("Converting Weight column to numeric...")
-        master['Weight'] = pd.to_numeric(master['Weight'], errors='coerce').fillna(0)
+        # FIX: use WeightQuantityFactor (= Weight x QuantityFactor), i.e. grams
+        # per ONE sold unit, as defined in the ESG Data Collection TechDoc.
+        # Raw 'Weight' is per component (e.g. a full shipper case), which
+        # overstated Customer/Transport packaging.
+        print_log("Using WeightQuantityFactor (weight per sold unit)...")
+        master['Weight'] = pd.to_numeric(master['WeightQuantityFactor'], errors='coerce').fillna(0)
 
         # ── UPDATED: filter for ALL THREE packaging levels ─────────────────────
         packaging_levels = ['Consumer', 'Customer', 'Transport']
