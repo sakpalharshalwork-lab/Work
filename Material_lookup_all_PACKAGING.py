@@ -423,6 +423,11 @@ def main():
         print_log("Using WeightQuantityFactor (weight per sold unit)...")
         master['Weight'] = pd.to_numeric(master['WeightQuantityFactor'], errors='coerce').fillna(0)
 
+        # Remove leading zeros so 099350169839 and 99350169839 match
+        print_log("Removing leading zeros from Material and FG Code...")
+        master['Material'] = master['Material'].str.lstrip('0')
+        master['FG Code']  = master['FG Code'].str.lstrip('0')
+
         # ── UPDATED: filter for ALL THREE packaging levels ─────────────────────
         packaging_levels = ['Consumer', 'Customer', 'Transport']
 
@@ -463,6 +468,7 @@ def main():
             .dropna()
             .astype(str)
             .str.strip()
+            .str.lstrip('0')
         )
         material_codes = material_codes[material_codes != ''].unique().tolist()
         print_log(f"✓ Found {len(material_codes):,} unique material codes", "SUCCESS")
