@@ -212,27 +212,32 @@ def validate_columns(df, required_columns, file_description):
     
     print_log(f"✓ All {len(required_columns)} required columns present", "SUCCESS")
 
-def search_master_by_material(material_code, master):
-    """Search master file by Material with fallback to FG Code."""
-    subset = master[master['Material'] == material_code]
-    if not subset.empty:
-        return subset
-    
-    subset = master[master['FG Code'] == material_code]
-    if not subset.empty:
-        return subset
-    
-    return pd.DataFrame()
+def normalize_ean(ean_value):
+    """Normalize EAN value to string format, handling scientific notation."""
+    if pd.isna(ean_value) or ean_value == '' or ean_value == 'nan':
+        return ''
+    try:
+        ean_float = float(ean_value)
+        return str(int(ean_float))
+    except:
+        return str(ean_value).strip()
+
+def search_master_by_ean(ean_code, master):
+    """Search master file by EAN/UPC column."""
+    if not ean_code or ean_code == '':
+        return pd.DataFrame()
+    subset = master[master['EAN/UPC'] == ean_code]
+    return subset
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # UPDATED: process_codes_vectorized now separates output by packaging level
 # Output columns follow the pattern:  Consumer_Plastic, Customer_Metal, etc.
-# Three clear blocks per material: Consumer | Customer | Transport
+# Three clear blocks per EAN: Consumer | Customer | Transport
 # ──────────────────────────────────────────────────────────────────────────────
-def process_codes_vectorized(material_codes, master, fixed_constituents, packaging_levels):
+def process_codes_vectorized(ean_codes, master, fixed_constituents, packaging_levels):
     """
-    Process material codes and output one row per material, with separate
+    Process EAN codes and output one row per EAN, with separate
     column blocks for each EC Packaging Level (Consumer / Customer / Transport).
 
     Column naming convention:
@@ -241,17 +246,18 @@ def process_codes_vectorized(material_codes, master, fixed_constituents, packagi
         {Level}_Aluminum                   e.g.  Transport_Aluminum
     """
     print_separator()
-    print_log(f"Processing {len(material_codes):,} unique material codes...")
+    print_log(f"Processing {len(ean_codes):,} unique EAN codes...")
     print_log(f"Packaging levels: {', '.join(packaging_levels)}")
     process_start = time.time()
 
     result_rows  = []
     missing_codes = []
+    multi_material_eans = []   # EANs linked to more than one material
 
-    total               = len(material_codes)
-    checkpoint_interval = max(100, total // 20)   # update every ~5 %
+    total               = len(ean_codes)
+    checkpoint_interval = max(100, total // 20)   # update every ~5%
 
-    for idx, material_code in enumerate(material_codes, 1):
+    for idx, ean_code in enumerate(ean_codes, 1):
 
         # ── progress bar ──────────────────────────────────────────────────────
         if idx % checkpoint_interval == 0 or idx == total:
@@ -264,16 +270,16 @@ def process_codes_vectorized(material_codes, master, fixed_constituents, packagi
                 suffix=f'{rate:.0f} codes/sec | ETA: {eta:.0f}s'
             )
 
-        # ── look up material in master ─────────────────────────────────────────
-        subset = search_master_by_material(material_code, master)
+        # ── look up EAN in master ──────────────────────────────────────────────
+        subset = search_master_by_ean(ean_code, master)
 
         if subset.empty:
-            # ── material not found: empty row with zeros ───────────────────────
-            missing_codes.append(material_code)
+            # ── EAN not found: empty row with zeros ────────────────────────────
+            missing_codes.append(ean_code)
             row = {
-                'Material':    material_code,
-                'EAN':         '',
-                'Code Title':  '',
+                'Material':     '',
+                'EAN':          ean_code,
+                'Code Title':   '',
                 'Gross Weight': '',
                 'Net Weight':   ''
             }
@@ -288,21 +294,19 @@ def process_codes_vectorized(material_codes, master, fixed_constituents, packagi
             row['Recycled Weight (kg)'] = ''
 
         else:
-            # ── material found ─────────────────────────────────────────────────
+            # ── EAN found ──────────────────────────────────────────────────────
             first_row = subset.iloc[0]
 
-            # EAN: handle scientific notation
-            ean_value = first_row.get('EAN/UPC', '')
-            if ean_value and ean_value != '':
-                try:
-                    ean_value = str(int(float(ean_value)))
-                except Exception:
-                    ean_value = str(ean_value)
+            # Keep only the first material (FG Code) linked to this EAN
+            fg_list = subset['FG Code'].dropna().unique().tolist()
+            if len(fg_list) > 1:
+                multi_material_eans.append((ean_code, fg_list))
+            subset = subset[subset['FG Code'] == first_row['FG Code']]
 
             # Base / product-level fields (same regardless of packaging level)
             row = {
-                'Material':     material_code,
-                'EAN':          ean_value,
+                'Material':     first_row.get('Material',     ''),
+                'EAN':          ean_code,
                 'Code Title':   first_row.get('Code Title',   ''),
                 'Gross Weight': first_row.get('Gross Weight', ''),
                 'Net Weight':   first_row.get('Net Weight',   '')
@@ -365,9 +369,16 @@ def process_codes_vectorized(material_codes, master, fixed_constituents, packagi
     process_time = time.time() - process_start
     print_log(f"✓ Processing complete in {process_time:.1f}s", "SUCCESS")
     print_log(
-        f"  Matched: {len(material_codes) - len(missing_codes):,} | "
+        f"  Matched: {len(ean_codes) - len(missing_codes):,} | "
         f"Missing: {len(missing_codes):,}"
     )
+    if multi_material_eans:
+        print_log(
+            f"⚠ {len(multi_material_eans):,} EAN(s) linked to >1 material "
+            f"- used first material only:", "WARNING"
+        )
+        for ean, fgs in multi_material_eans:
+            print_log(f"  {ean}: used {fgs[0]} | ignored {', '.join(fgs[1:])}")
     return result_rows, missing_codes
 
 
@@ -376,7 +387,7 @@ def main():
     start_time = time.time()
     
     print_separator("=", 80)
-    print_log("EXCEL DATA PROCESSOR v4.0 - MULTI-LEVEL PACKAGING SPLIT", "INFO")
+    print_log("EXCEL DATA PROCESSOR v10.0 - EAN CODE SEARCH - MULTI-LEVEL PACKAGING SPLIT", "INFO")
     print_separator("=", 80)
     
     log_path = None
@@ -385,7 +396,7 @@ def main():
         # Setup logging
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         folder    = os.path.dirname(os.path.abspath(__file__)) or os.getcwd()
-        log_path  = os.path.join(folder, f"PROCESS_LOG_{timestamp}.txt")
+        log_path  = os.path.join(folder, f"PROCESS_LOG_EAN_{timestamp}.txt")
         
         sys.stdout = TeeLogger(log_path)
         print_log(f"Working directory: {folder}")
@@ -395,7 +406,7 @@ def main():
         print_separator()
         print_log("Please select INPUT file...")
         input_path = select_file(
-            "Select INPUT file (with Material codes)",
+            "Select INPUT file (with EAN codes)",
             [("Excel files", "*.xlsx *.xls"), ("All files", "*.*")]
         )
         if not input_path:
@@ -411,7 +422,7 @@ def main():
             raise ValueError("No master file selected")
         print_log(f"✓ Master: {os.path.basename(master_path)}", "SUCCESS")
         
-        output_path = os.path.join(folder, f"RESULT_{timestamp}.xlsx")
+        output_path = os.path.join(folder, f"RESULT_EAN_{timestamp}.xlsx")
         
         # ── File access check ──────────────────────────────────────────────────
         print_separator()
@@ -425,22 +436,21 @@ def main():
         # ── Validate master columns ────────────────────────────────────────────
         print_separator()
         required_master_cols = [
-            'FG Code', 'Material', 'Code Title', 'Gross Weight', 'Net Weight',
+            'EAN/UPC', 'Material', 'Code Title', 'Gross Weight', 'Net Weight',
             'Constituent', 'Weight', 'WeightQuantityFactor', 'EC Packaging Level', 'ConstituentCategory',
-            'EAN/UPC', '% Recycled Content', 'Recycled WQF', 'Recycled Weight (kg)'
+            '% Recycled Content', 'Recycled WQF', 'Recycled Weight (kg)'
         ]
         validate_columns(master, required_master_cols, "master file")
+        
+        # Normalize EAN/UPC column in master
+        print_log("Normalizing EAN/UPC column...")
+        master['EAN/UPC'] = master['EAN/UPC'].apply(normalize_ean)
         
         # Convert Weight to numeric
         # Weight per sold unit
         print_log("Using WeightQuantityFactor (weight per sold unit)...")
         master['Weight'] = pd.to_numeric(master['WeightQuantityFactor'], errors='coerce').fillna(0)
         master['Recycled WQF'] = pd.to_numeric(master['Recycled WQF'], errors='coerce').fillna(0)
-
-        # Remove leading zeros so 099350169839 and 99350169839 match
-        print_log("Removing leading zeros from Material and FG Code...")
-        master['Material'] = master['Material'].str.lstrip('0')
-        master['FG Code']  = master['FG Code'].str.lstrip('0')
 
         # ── UPDATED: filter for ALL THREE packaging levels ─────────────────────
         packaging_levels = ['Consumer', 'Customer', 'Transport']
@@ -471,24 +481,18 @@ def main():
 
         # ── Load input ─────────────────────────────────────────────────────────
         input_df = load_excel_optimized(input_path)
-        validate_columns(input_df, ['Material'], "input file")
+        validate_columns(input_df, ['EAN'], "input file")
         input_df = normalize_dataframe(input_df)
         
-        # ── Extract unique material codes ──────────────────────────────────────
+        # ── Extract unique EAN codes ───────────────────────────────────────────
         print_separator()
-        print_log("Extracting unique Material codes...")
-        material_codes = (
-            input_df['Material']
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .str.lstrip('0')
-        )
-        material_codes = material_codes[material_codes != ''].unique().tolist()
-        print_log(f"✓ Found {len(material_codes):,} unique material codes", "SUCCESS")
+        print_log("Extracting unique EAN codes...")
+        ean_codes = input_df['EAN'].apply(normalize_ean)
+        ean_codes = ean_codes[ean_codes != ''].unique().tolist()
+        print_log(f"✓ Found {len(ean_codes):,} unique EAN codes", "SUCCESS")
         
-        if len(material_codes) == 0:
-            raise ValueError("No valid material codes found in input file!")
+        if len(ean_codes) == 0:
+            raise ValueError("No valid EAN codes found in input file!")
         
         # ── Fixed constituent types ────────────────────────────────────────────
         fixed_constituents = [
@@ -498,7 +502,7 @@ def main():
         
         # ── Process codes with level split ─────────────────────────────────────
         result_rows, missing_codes = process_codes_vectorized(
-            material_codes, master, fixed_constituents, packaging_levels
+            ean_codes, master, fixed_constituents, packaging_levels
         )
         
         # ── Build output columns: base + level blocks + recycled ───────────────
@@ -537,12 +541,13 @@ def main():
         print_log("SUMMARY", "INFO")
         print_separator("=", 80)
         match_rate = (
-            (len(material_codes) - len(missing_codes)) / len(material_codes) * 100
-            if material_codes else 0
+            (len(ean_codes) - len(missing_codes)) / len(ean_codes) * 100
+            if ean_codes else 0
         )
+        print_log(f"Search method              : EAN Code")
         print_log(f"Packaging levels in output : {', '.join(packaging_levels)}")
-        print_log(f"Total codes                : {len(material_codes):,}")
-        print_log(f"Matched                    : {len(material_codes) - len(missing_codes):,} ({match_rate:.1f}%)")
+        print_log(f"Total codes                : {len(ean_codes):,}")
+        print_log(f"Matched                    : {len(ean_codes) - len(missing_codes):,} ({match_rate:.1f}%)")
         print_log(f"Missing                    : {len(missing_codes):,} ({100 - match_rate:.1f}%)")
         
         if missing_codes:
