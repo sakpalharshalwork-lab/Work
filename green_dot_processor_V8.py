@@ -17,6 +17,7 @@ class GreenDotProcessor:
         self.output_path = None
         self.log_file = None
         self.cp_dict_percent = {}
+        self.cp_const_dict_percent = {}
         self.fg_dict = {}
         
     def setup_logging(self):
@@ -102,7 +103,15 @@ class GreenDotProcessor:
             recycled_vals = pd.to_numeric(df.iloc[:, 6], errors="coerce").fillna(0).clip(0, 100)
             
             self.cp_dict_percent = dict(zip(cp_codes, recycled_vals))
-            
+
+            # One CP code can have a different recycled % per constituent:
+            # also keep CP Code + Constituent pairs for a more exact match
+            const_col = next((c for c in df.columns if str(c).strip().lower() == "constituent"), None)
+            if const_col is not None:
+                constituents = df[const_col].fillna("").astype(str).str.strip().str.upper()
+                self.cp_const_dict_percent = dict(zip(zip(cp_codes, constituents), recycled_vals))
+                logging.info(f"Loaded {len(self.cp_const_dict_percent):,} CP Code + Constituent pairs")
+
             logging.info(f"Env rows read: {len(cp_codes):,} | Unique CP codes: {cp_codes.nunique():,}")
             logging.info(f"✅ Loaded {len(self.cp_dict_percent)} CP codes")
             
@@ -118,15 +127,16 @@ class GreenDotProcessor:
             preview = pd.read_excel(self.fg_to_spec_path, engine="openpyxl", header=None, nrows=20)
             header_row = 0
             for i, row in preview.iterrows():
-                if any(str(v).strip().lower() == "specification" for v in row.values):
+                if any(str(v).strip().lower() in ("specification", "pecification") for v in row.values):
                     header_row = i
                     break
             df = pd.read_excel(self.fg_to_spec_path, engine="openpyxl", header=header_row)
 
             # Find columns by name: ignores case, spaces and small name differences
             names = {c: str(c).strip().lower() for c in df.columns}
-            spec_col = next((c for c, n in names.items() if n == "specification"), None) \
-                or next((c for c, n in names.items() if "spec" in n), None)
+            spec_col = next((c for c, n in names.items() if n in ("specification", "pecification")), None) \
+                or next((c for c, n in names.items()
+                         if "spec" in n and "key" not in n and "type" not in n), None)
             mat_col = next((c for c, n in names.items() if n == "material"), None) \
                 or next((c for c, n in names.items() if "material" in n), None)
             if spec_col is None or mat_col is None:
@@ -136,9 +146,17 @@ class GreenDotProcessor:
                 )
             logging.info(f"   Header row: {header_row + 1} | Spec column: '{spec_col}' | Material column: '{mat_col}'")
 
+            # SAP export can split the header into "S" + "pecification":
+            # "S" then holds the first character of the code, "pecification" the rest
+            spec_values = df[spec_col].fillna("").astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+            s_col = next((c for c, n in names.items() if n == "s"), None)
+            if names[spec_col] == "pecification" and s_col is not None:
+                first_char = df[s_col].fillna("").astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+                spec_values = first_char + spec_values
+                logging.info(f"   Split header detected: Specification = '{s_col}' + '{spec_col}'")
+
             # Same key format as FG Code in process_green_dot_file (12 digits, leading zeros)
-            spec_keys = (df[spec_col].astype(str).str.strip()
-                         .str.replace(r"\.0$", "", regex=True).str.zfill(12))
+            spec_keys = spec_values.str.zfill(12)
             materials = (df[mat_col].astype(str).str.strip()
                          .str.replace(r"\.0$", "", regex=True)
                          .replace({"nan": "Not Found", "None": "Not Found", "": "Not Found"})
@@ -271,7 +289,16 @@ class GreenDotProcessor:
             melted["CP Code"] = melted[cp_col].astype(str).str.strip().str.upper().str.lstrip("0")
             
             # Map recycled content
-            melted["% Recycled Content"] = melted["CP Code"].map(self.cp_dict_percent).fillna(0)
+            # 1st: CP Code + Constituent, 2nd: CP Code only, else 0
+            pair_keys = pd.Series(
+                list(zip(melted["CP Code"], melted["ConstituentCategory"].astype(str).str.strip().str.upper())),
+                index=melted.index
+            )
+            melted["% Recycled Content"] = (
+                pair_keys.map(self.cp_const_dict_percent)
+                .fillna(melted["CP Code"].map(self.cp_dict_percent))
+                .fillna(0)
+            )
             
             # Calculate Recycled WQF - VECTORIZED
             melted["Recycled WQF"] = melted["WeightQuantityFactor"] * melted["% Recycled Content"] / 100
