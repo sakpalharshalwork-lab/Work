@@ -282,6 +282,7 @@ def process_codes_vectorized(material_codes, master, fixed_constituents, packagi
                     row[f'{level}_{c}'] = 0.0
                 row[f'{level}_Metals_without_Aluminum'] = 0.0
                 row[f'{level}_Aluminum']                = 0.0
+                row[f'{level}_% Recycled']               = ''
 
             row['% Recycled Content']   = ''
             row['Recycled Weight (kg)'] = ''
@@ -320,6 +321,7 @@ def process_codes_vectorized(material_codes, master, fixed_constituents, packagi
                         row[f'{level}_{c}'] = 0.0
                     row[f'{level}_Metals_without_Aluminum'] = 0.0
                     row[f'{level}_Aluminum']                = 0.0
+                    row[f'{level}_% Recycled']               = ''
                     continue
 
                 # Sum Weight by Constituent for this level
@@ -343,9 +345,20 @@ def process_codes_vectorized(material_codes, master, fixed_constituents, packagi
                     level_subset[metal_no_alu_mask]['Weight'].sum()
                 )
 
-            # Recycled content kept as an overall figure (not per-level)
-            row['% Recycled Content']   = first_row.get('% Recycled Content',   '')
-            row['Recycled Weight (kg)'] = first_row.get('Recycled Weight (kg)', '')
+                # Recycled % for this level = recycled weight / total weight
+                level_weight = level_subset['Weight'].sum()
+                row[f'{level}_% Recycled'] = (
+                    round(level_subset['Recycled WQF'].sum() / level_weight * 100, 2)
+                    if level_weight > 0 else ''
+                )
+
+            # Recycled content: totals across all components and levels
+            total_weight   = subset['Weight'].sum()
+            total_recycled = subset['Recycled WQF'].sum()
+            row['% Recycled Content']   = (
+                round(total_recycled / total_weight * 100, 2) if total_weight > 0 else ''
+            )
+            row['Recycled Weight (kg)'] = total_recycled / 1000
 
         result_rows.append(row)
 
@@ -414,7 +427,7 @@ def main():
         required_master_cols = [
             'FG Code', 'Material', 'Code Title', 'Gross Weight', 'Net Weight',
             'Constituent', 'Weight', 'WeightQuantityFactor', 'EC Packaging Level', 'ConstituentCategory',
-            'EAN/UPC', '% Recycled Content', 'Recycled Weight (kg)'
+            'EAN/UPC', '% Recycled Content', 'Recycled WQF', 'Recycled Weight (kg)'
         ]
         validate_columns(master, required_master_cols, "master file")
         
@@ -422,6 +435,7 @@ def main():
         # Weight per sold unit
         print_log("Using WeightQuantityFactor (weight per sold unit)...")
         master['Weight'] = pd.to_numeric(master['WeightQuantityFactor'], errors='coerce').fillna(0)
+        master['Recycled WQF'] = pd.to_numeric(master['Recycled WQF'], errors='coerce').fillna(0)
 
         # Remove leading zeros so 099350169839 and 99350169839 match
         print_log("Removing leading zeros from Material and FG Code...")
@@ -498,6 +512,7 @@ def main():
                 level_cols.append(f'{level}_{c}')
             level_cols.append(f'{level}_Metals_without_Aluminum')
             level_cols.append(f'{level}_Aluminum')
+            level_cols.append(f'{level}_% Recycled')
 
         output_cols = base_cols + level_cols + ['% Recycled Content', 'Recycled Weight (kg)']
 
