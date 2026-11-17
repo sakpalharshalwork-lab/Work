@@ -309,6 +309,15 @@ class GreenDotProcessor:
         ]
         
         final_cols = [col for col in final_cols if col in merged_df.columns]
+
+        # Keep any extra source columns (new report format), placed before "Constituent"
+        extra_cols = [col for col in merged_df.columns
+                      if col not in final_cols and col != "Constituent_Raw"]
+        if extra_cols:
+            logging.info(f"Extra columns kept: {', '.join(map(str, extra_cols))}")
+            pos = final_cols.index("Constituent") if "Constituent" in final_cols else len(final_cols)
+            final_cols = final_cols[:pos] + extra_cols + final_cols[pos:]
+
         merged_df = merged_df[final_cols]
         
         logging.info(f"💾 Saving {len(merged_df):,} rows to Excel...")
