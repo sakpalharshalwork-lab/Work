@@ -419,10 +419,7 @@ def main():
         validate_columns(master, required_master_cols, "master file")
         
         # Convert Weight to numeric
-        # FIX: use WeightQuantityFactor (= Weight x QuantityFactor), i.e. grams
-        # per ONE sold unit, as defined in the ESG Data Collection TechDoc.
-        # Raw 'Weight' is per component (e.g. a full shipper case), which
-        # overstated Customer/Transport packaging.
+        # Weight per sold unit
         print_log("Using WeightQuantityFactor (weight per sold unit)...")
         master['Weight'] = pd.to_numeric(master['WeightQuantityFactor'], errors='coerce').fillna(0)
 

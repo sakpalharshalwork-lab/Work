@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 class GreenDotProcessor:
-    """Enhanced Green Dot Report Processor - V8 (per-FG QuantityFactor fix + duplicate removal)"""
+    """Enhanced Green Dot Report Processor - Optimized for Speed"""
     
     def __init__(self):
         self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -137,8 +137,7 @@ class GreenDotProcessor:
             # Load file
             df = pd.read_excel(file_path, engine="openpyxl")
 
-            # FIX: remove exact duplicate rows (same FG, CP and every value).
-            # TechDoc: FG + Component + Constituent must be unique.
+            # Remove exact duplicate rows
             dup_count = df.duplicated().sum()
             if dup_count:
                 logging.warning(f"   Removed {dup_count:,} exact duplicate rows")
@@ -216,8 +215,7 @@ class GreenDotProcessor:
             base_factor.loc[mask1] = 2
             
             # Condition 2: FG has a Consumer row with bom=1 and qty=1000
-            # FIX: per TechDoc this applies to ALL CP codes of that FG
-            # (all packaging levels), not only to the Consumer row itself.
+            # Applies to all CP codes of that FG (all packaging levels)
             special_row = (melted["ec_clean"] == "Consumer") & (melted["bom_num"] == 1) & (melted["qty_num"] == 1000)
             special_fgs = melted.loc[special_row, fg_col].unique()
             mask2 = (~mask1) & melted[fg_col].isin(special_fgs)

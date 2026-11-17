@@ -296,9 +296,7 @@ def process_codes_vectorized(ean_codes, master, fixed_constituents, packaging_le
             # ── EAN found ──────────────────────────────────────────────────────
             first_row = subset.iloc[0]
 
-            # FIX: one EAN can map to several materials (FG Codes).
-            # Keep only the first material's rows, so weights are not
-            # summed across all materials sharing the same EAN.
+            # Keep only the first material (FG Code) linked to this EAN
             fg_list = subset['FG Code'].dropna().unique().tolist()
             if len(fg_list) > 1:
                 multi_material_eans.append((ean_code, fg_list))
@@ -436,10 +434,7 @@ def main():
         master['EAN/UPC'] = master['EAN/UPC'].apply(normalize_ean)
         
         # Convert Weight to numeric
-        # FIX: use WeightQuantityFactor (= Weight x QuantityFactor), i.e. grams
-        # per ONE sold unit, as defined in the ESG Data Collection TechDoc.
-        # Raw 'Weight' is per component (e.g. a full shipper case), which
-        # overstated Customer/Transport packaging.
+        # Weight per sold unit
         print_log("Using WeightQuantityFactor (weight per sold unit)...")
         master['Weight'] = pd.to_numeric(master['WeightQuantityFactor'], errors='coerce').fillna(0)
 
