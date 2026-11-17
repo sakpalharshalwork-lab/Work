@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 
 class GreenDotProcessor:
-    """Enhanced Green Dot Report Processor - Optimized for Speed"""
+    """Enhanced Green Dot Report Processor - V8 (per-FG QuantityFactor fix + duplicate removal)"""
     
     def __init__(self):
         self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
